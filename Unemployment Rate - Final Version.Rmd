@@ -1,0 +1,367 @@
+---
+title: "632 project"
+author: "Akhil Sachar - Arash Ahmadi"
+date: "2025-04-26"
+output: pdf_document
+---
+## 1) Load Data & Data Cleaning
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r} 
+library(stringr)
+library(readxl)
+library(MASS)
+library(car)
+library(gridExtra)
+library(dplyr)
+library(GGally)
+```
+
+
+```{r}
+# load data from all sources and join them
+
+qol_data <- read.csv("QOL(County Level).csv",header= T)
+income_data <- read.csv("Income_Urban_VS_Rural.csv",header= T)
+covid_data <- read.csv("Provisional_COVID-19_Death_Counts_in_the_United_States_by_County.csv",header= T)
+poverty_data <- read_excel("Poverty2023.xlsx")
+education_data <- read_excel("Education2023.xlsx")
+insurance_data <- read_excel("2024_county_health_release_data_-_v1.xlsx",sheet=2)
+insurance_data_2 <- read_excel("2024_county_health_release_data_-_v1.xlsx",sheet=4)
+
+poverty_data <- poverty_data %>%
+  rename(FIPS = FIPS_Code)%>%
+  mutate(FIPS = sprintf("%05s", FIPS))%>%
+  dplyr::select(FIPS,PCTPOVALL_2023) %>%
+  mutate(FIPS = as.numeric(FIPS))
+
+insurance_data <- insurance_data %>%
+  mutate(FIPS = sprintf("%05s", FIPS))%>%
+  dplyr::select(FIPS,`% Uninsured`)%>%
+  mutate(FIPS = as.numeric(FIPS))
+
+insurance_data_2 <- insurance_data_2 %>%
+  mutate(FIPS = sprintf("%05s", FIPS))%>%
+  dplyr::select(FIPS,`Life Expectancy`)%>%
+  mutate(FIPS = as.numeric(FIPS))
+
+education_data <- education_data %>%
+  rename(FIPS = `FIPS Code`)%>%
+  mutate(FIPS = sprintf("%05s", FIPS))%>%
+  dplyr::select(FIPS,`Percent of adults with a bachelor's degree or higher, 2019-23`)%>%
+  mutate(FIPS = as.numeric(FIPS))
+
+
+qol_data <- qol_data %>%
+  mutate(FIPS = sprintf("%05s", FIPS))%>%
+  dplyr::select(FIPS, X2016.Crime.Rate, Unemployment, AQI.Good, NtnlPrkCnt,Cost.of.Living, X2022.Median.Income,, AVG.C2I, Diversity.Rank..Gender., Diversity.Rank..Race., Stu.Tea.Rank)%>%
+  mutate(FIPS = as.numeric(FIPS))
+
+income_data <- income_data %>%
+  mutate(FIPS = sprintf("%05s", FIPS))%>%
+  dplyr::select(FIPS, Total.Population, Median.Household.Income,Urban.Rural)%>%
+  mutate(FIPS = as.numeric(FIPS))
+
+covid_data <- covid_data %>%
+  rename(FIPS = FIPS.County.Code) %>% 
+  mutate(FIPS = sprintf("%05s", FIPS))%>%
+  dplyr::select(FIPS,  Deaths.from.All.Causes)%>%
+  mutate(FIPS = as.numeric(FIPS))
+
+joined_data <- qol_data %>%
+  left_join(income_data, by = "FIPS") %>%
+  left_join(covid_data, by = "FIPS") %>%
+  left_join(poverty_data, by = "FIPS") %>%
+  left_join(education_data, by = "FIPS") %>%
+  left_join(insurance_data, by = "FIPS") %>%
+  left_join(insurance_data_2, by = "FIPS")
+
+# View the result
+
+cols_to_clean <- c("Unemployment", "AQI.Good", "AVG.C2I")  
+cols_to_clean_2 <- c("X2022.Median.Income","Cost.of.Living") 
+to_numeric <- c("Unemployment", "AQI.Good", "AVG.C2I","X2022.Median.Income","Cost.of.Living")
+joined_data <- joined_data %>%
+  mutate(across(all_of(cols_to_clean), ~ str_replace_all(., "%", ""))) %>%
+  mutate(across(all_of(cols_to_clean_2), ~ str_replace_all(., "[$,]", ""))) %>%
+  mutate(across(all_of(to_numeric), as.numeric)) %>%
+  mutate(across(c(Urban.Rural), as.factor)) %>% 
+  mutate(crime = sapply(X2016.Crime.Rate, function(x) eval(parse(text = x)))) %>% 
+  rename(
+    MedianIncome = Median.Household.Income,
+    AQI = AQI.Good,
+    C2I=AVG.C2I,
+    Gender=Diversity.Rank..Gender.,
+    Race=Diversity.Rank..Race.,
+    NationalPark=NtnlPrkCnt,
+    StudentTeacher=Stu.Tea.Rank,
+    Poverty=PCTPOVALL_2023,
+    Deaths=Deaths.from.All.Causes,
+    Uninsured=`% Uninsured`,
+    Bachelors=`Percent of adults with a bachelor's degree or higher, 2019-23`
+  )
+head(joined_data)
+```
+
+
+```{r}
+summary(joined_data)
+```
+
+
+```{r}
+levels(joined_data$Urban.Rural.Code)
+```
+
+```{r}
+colnames(joined_data)
+```
+
+```{r}
+joined_data<-na.omit(joined_data)
+```
+
+```{r}
+#joined_data <- joined_data %>%
+#  dplyr::select(-c( FIPS, X2016.Crime.Rate))
+```
+
+```{r}
+sum(joined_data$Unemployment == 0)
+joined_data<-joined_data[joined_data$Unemployment > 0, ]
+```
+## 2) Data Explatory Analysis
+
+```{r}
+pairs(Unemployment ~  AQI + Cost.of.Living + C2I +Poverty+MedianIncome+`Uninsured`+`Life Expectancy`, data = joined_data)
+```
+
+```{r}
+ggpairs(
+  data = joined_data,
+  columns = c("Unemployment", "AQI", "Cost.of.Living", "C2I", "Poverty", "MedianIncome", "Uninsured", "Life Expectancy"),
+  upper = list(continuous = wrap("cor", size = 7)),
+  lower = list(continuous = wrap("points", alpha = 0.7, size = 1.5)),
+  diag = list(continuous = wrap("densityDiag", alpha = 0.5)))
+```
+
+
+
+```{r}
+ggplot(joined_data, aes(x = AQI, y = Unemployment)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Unemployment vs AQI Good", x = "AQI Good", y = "Unemployment Rate")
+```
+
+```{r}
+ggplot(joined_data, aes(x = MedianIncome, y = Cost.of.Living)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Income & Cost of living", x = "Medina Income", y = "Cost of Living")
+```
+They are correlated and therefore we define the C2I.
+
+```{r}
+ggplot(joined_data, aes(x = C2I, y = Unemployment)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Unemployment vs Average cost/Income", x = "Average cost/Income", y = "Unemployment Rate")
+```
+
+
+```{r}
+ggplot(joined_data, aes(x = Poverty, y = Unemployment)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Unemployment vs Poverty", x = "Poverty", y = "Unemployment Rate")
+```
+
+```{r}
+ggplot(joined_data, aes(x = Urban.Rural, y = Unemployment)) +
+  geom_boxplot() +
+  labs(title = "Unemployment vs Area Type", x = "Area Type", y = "Unemployment Rate")
+```
+
+```{r}
+ggplot(joined_data, aes(x = Urban.Rural, y = Bachelors)) +
+  geom_boxplot() +
+  labs(title = "Degree vs Area Type", x = "Area Type", y = "Percentage of Adults with B.S. or higher degree")
+```
+
+```{r}
+ggplot(joined_data, aes(x = Urban.Rural, y = Uninsured)) +
+  geom_boxplot() +
+  labs(title = "Pct of Uninsured vs Area Type", x = "Area Type", y = "Uninsured Rate")
+```
+
+```{r}
+ggplot(joined_data, aes(x = crime, y = Unemployment)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Unemployment vs Crime", x = "Crime Rate", y = "Unemployment Rate")
+```
+
+## 3) Modeling
+
+
+```{r}
+lm1 <- lm(log(Unemployment) ~ ., data = joined_data)
+summary(lm1)
+```
+
+
+```{r}
+lm2 <- lm(log(Unemployment) ~ AQI  + C2I + Total.Population + 
+    MedianIncome + Urban.Rural + `Uninsured` + `Life Expectancy`, data = joined_data)
+summary(lm2)
+```
+
+
+
+
+```{r}
+lm1 <- lm(log(Unemployment) ~ AQI +NationalPark+C2I+StudentTeacher+Total.Population+Urban.Rural+Uninsured+`Life Expectancy`+crime+Bachelors+Deaths+Poverty, data = joined_data)
+summary(lm1)
+```
+
+
+```{r}
+library(corrplot)
+```
+```{r}
+stepwise_model <- stepAIC(lm1, direction = "backward", trace = F)
+stepwise_model
+```
+
+
+```{r}
+lm2 <- lm(sqrt(Unemployment) ~ AQI + NationalPark + C2I + Urban.Rural + 
+    Uninsured  + Bachelors + Deaths + Poverty, data = joined_data)
+summary(lm2)
+```
+
+```{r}
+coefs <- coef(lm2)
+formula_string <- paste0(
+  "log(Unemployment) = ",
+  round(coefs[1], 5), " + ",
+  paste(
+    paste0(round(coefs[-1], 5), " * ", names(coefs)[-1]),
+    collapse = " + "
+  )
+)
+
+# Print it
+cat(formula_string)
+```
+```{r}
+shapiro.test(rstandard(lm2))
+```
+
+
+```{r}
+lm3 <- lm(MedianIncome ~ AQI +NationalPark+Cost.of.Living+Unemployment+C2I+Race+Gender+StudentTeacher+Total.Population+Urban.Rural+Uninsured+`Life Expectancy`+crime+Bachelors+Deaths+Poverty, data = joined_data)
+summary(lm3)
+```
+
+
+```{r}
+stepwise_model <- stepAIC(lm3, direction = "backward")
+```
+```{r}
+lm4<- lm(MedianIncome ~ AQI + NationalPark + Cost.of.Living + Unemployment + 
+    C2I + Race + Gender + StudentTeacher + Total.Population + 
+    Uninsured + `Life Expectancy` + crime + Bachelors + Deaths + 
+    Poverty, data = joined_data)
+summary(lm4)
+```
+
+
+```{r}
+
+
+#jd$log_unemp<-log(jd$Unemployment)
+corrplot(cor(joined_data[c("Unemployment","C2I","MedianIncome", "Uninsured","Life Expectancy","AQI","crime","Poverty")]), method = "color", type = "upper", tl.cex = 0.8,addCoef.col = "black", tl.pos = "l", bg = "gray90")
+```
+
+
+
+
+```{r}
+vif(lm2)
+```
+
+
+
+```{r}
+coefs <- summary(lm2)$coefficients
+# Make a dataframe
+coef_df <- data.frame(
+  term = rownames(coefs),
+  estimate = coefs[, "Estimate"],
+  std_error = coefs[, "Std. Error"]
+)
+
+# Exclude intercept for clarity
+coef_df <- coef_df[coef_df$term != "(Intercept)", ]
+
+# Add a color column based on sign of estimate
+coef_df$color <- ifelse(coef_df$estimate > 0, "Positive", "Negative")
+
+# Plot
+ggplot(coef_df, aes(x = estimate, y = reorder(term, estimate), color = color)) +
+  geom_point(size = 3) +
+  geom_errorbarh(aes(xmin = estimate - std_error, xmax = estimate + std_error), height = 0.2) +
+  scale_color_manual(values = c("Positive" = "red", "Negative" = "blue")) +
+  labs(
+    title = "Fancy Coefficient Plot",
+    x = "Estimate",
+    y = "Predictor",
+    color = "Effect"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "top")
+```
+
+
+
+
+```{r}
+joined_data %>%
+  dplyr::select(where(is.numeric)) %>%
+  print()
+```
+
+```{r}
+lm2_data <- data.frame(fitted = fitted(lm2), residuals = residuals(lm2))
+
+# Plot 1: Residuals vs Fitted (Check for homoscedasticity)
+p1 <- ggplot(lm2_data, aes(x = fitted, y = residuals)) +
+  geom_point(color = "blue", alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Residuals vs Fitted", x = "Fitted Values", y = "Residuals") +
+  
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Plot 2: Q-Q plot (Check for normality of residuals)
+p2 <- ggplot(lm2_data, aes(sample = residuals)) +
+  geom_qq() +
+  geom_qq_line(color = "red") +
+  labs(title = "Normal Q-Q Plot", x = "Theoretical Quantiles", y = "Sample Quantiles") +
+  
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Display the plots
+grid.arrange(p1, p2, ncol = 2)
+```
+
+
+```{r}
+plot(lm2,1:2)
+```
+
+
